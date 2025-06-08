@@ -31,15 +31,30 @@
 #include "globvar.h"
 
 /* TODO: NOT IMPLEMENTED */
-int fh_pkt6_make(char *buffer, size_t buffer_size, uint8_t *saddr_be,
-                 uint8_t *daddr_be, uint16_t sport_be, uint16_t dport_be,
+int fh_pkt6_parse(void *pkt_data, int pkt_len, struct sockaddr *saddr,
+                  struct sockaddr *daddr, struct tcphdr **tcph,
+                  int *tcp_payload_len)
+{
+    (void) pkt_data;
+    (void) pkt_len;
+    (void) saddr;
+    (void) daddr;
+    (void) tcph;
+    (void) tcp_payload_len;
+
+    return -1;
+}
+
+/* TODO: NOT IMPLEMENTED */
+int fh_pkt6_make(char *buffer, size_t buffer_size, struct sockaddr *saddr,
+                 struct sockaddr *daddr, uint16_t sport_be, uint16_t dport_be,
                  uint32_t seq_be, uint32_t ackseq_be, int psh,
                  char *tcp_payload, size_t tcp_payload_size)
 {
     (void) buffer;
     (void) buffer_size;
-    (void) saddr_be;
-    (void) daddr_be;
+    (void) saddr;
+    (void) daddr;
     (void) sport_be;
     (void) dport_be;
     (void) seq_be;

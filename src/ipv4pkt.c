@@ -26,14 +26,72 @@
 #include <string.h>
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
+#include <sys/socket.h>
 #include <libnetfilter_queue/libnetfilter_queue_ipv4.h>
 #include <libnetfilter_queue/libnetfilter_queue_tcp.h>
 
 #include "globvar.h"
 #include "logging.h"
 
-int fh_pkt4_make(char *buffer, size_t buffer_size, uint32_t saddr_be,
-                 uint32_t daddr_be, uint16_t sport_be, uint16_t dport_be,
+int fh_pkt4_parse(void *pkt_data, int pkt_len, struct sockaddr *saddr,
+                  struct sockaddr *daddr, struct tcphdr **tcph_ptr,
+                  int *tcp_payload_len)
+{
+    struct iphdr *iph;
+    struct tcphdr *tcph;
+    int iph_len, tcph_len;
+    struct sockaddr_in *saddr_in, *daddr_in;
+
+    saddr_in = (struct sockaddr_in *) saddr;
+    daddr_in = (struct sockaddr_in *) daddr;
+
+    if ((size_t) pkt_len < sizeof(*iph)) {
+        E("ERROR: invalid packet length: %d", pkt_len);
+        return -1;
+    }
+
+    iph = (struct iphdr *) pkt_data;
+    iph_len = iph->ihl * 4;
+
+    if ((size_t) iph_len < sizeof(*iph)) {
+        E("ERROR: invalid IP header length: %d", iph_len);
+        return -1;
+    }
+
+    if (iph->protocol != IPPROTO_TCP) {
+        E("ERROR: not a TCP packet (protocol %d)", (int) iph->protocol);
+        return -1;
+    }
+
+    if ((size_t) pkt_len < iph_len + sizeof(*tcph)) {
+        E("ERROR: invalid packet length: %d", pkt_len);
+        return -1;
+    }
+
+    tcph = (struct tcphdr *) ((uint8_t *) pkt_data + iph_len);
+    tcph_len = tcph->doff * 4;
+    if ((size_t) pkt_len < iph_len + tcph_len) {
+        E("ERROR: invalid packet length: %d", pkt_len);
+        return -1;
+    }
+
+    memset(saddr_in, 0, sizeof(*saddr_in));
+    saddr_in->sin_family = AF_INET;
+    saddr_in->sin_addr.s_addr = iph->saddr;
+
+    memset(daddr_in, 0, sizeof(*daddr_in));
+    daddr_in->sin_family = AF_INET;
+    daddr_in->sin_addr.s_addr = iph->daddr;
+
+    *tcph_ptr = tcph;
+    *tcp_payload_len = pkt_len - iph_len - tcph_len;
+
+    return 0;
+}
+
+
+int fh_pkt4_make(char *buffer, size_t buffer_size, struct sockaddr *saddr,
+                 struct sockaddr *daddr, uint16_t sport_be, uint16_t dport_be,
                  uint32_t seq_be, uint32_t ackseq_be, int psh,
                  char *tcp_payload, size_t tcp_payload_size)
 {
@@ -41,6 +99,15 @@ int fh_pkt4_make(char *buffer, size_t buffer_size, uint32_t saddr_be,
     struct iphdr *iph;
     struct tcphdr *tcph;
     char *tcppl;
+    struct sockaddr_in *saddr_in, *daddr_in;
+
+    if (saddr->sa_family != AF_INET || daddr->sa_family != AF_INET) {
+        E("ERROR: Invalid address family");
+        return -1;
+    }
+
+    saddr_in = (struct sockaddr_in *) saddr;
+    daddr_in = (struct sockaddr_in *) daddr;
 
     pkt_len = sizeof(*iph) + sizeof(*tcph) + tcp_payload_size;
     if (buffer_size < pkt_len + 1) {
@@ -62,8 +129,8 @@ int fh_pkt4_make(char *buffer, size_t buffer_size, uint32_t saddr_be,
     iph->ttl = g_ctx.ttl;
     iph->protocol = IPPROTO_TCP;
     iph->check = 0;
-    iph->saddr = saddr_be;
-    iph->daddr = daddr_be;
+    iph->saddr = saddr_in->sin_addr.s_addr;
+    iph->daddr = daddr_in->sin_addr.s_addr;
 
     memset(tcph, 0, sizeof(*tcph));
     tcph->source = sport_be;
