@@ -63,46 +63,6 @@ invalid:
 }
 
 
-static int send_ack(struct sockaddr_ll *sll, struct sockaddr *saddr,
-                    struct sockaddr *daddr, uint16_t sport_be,
-                    uint16_t dport_be, uint32_t seq_be, uint32_t ackseq_be)
-{
-    int pkt_len;
-    ssize_t nbytes;
-    char pkt_buff[1024];
-
-    if (daddr->sa_family == AF_INET) {
-        pkt_len = fh_pkt4_make(pkt_buff, sizeof(pkt_buff), saddr, daddr,
-                               sport_be, dport_be, seq_be, ackseq_be, 0, NULL,
-                               0);
-        if (pkt_len < 0) {
-            E(T(fh_pkt4_make));
-            return -1;
-        }
-    } else if (daddr->sa_family == AF_INET6) {
-        pkt_len = fh_pkt6_make(pkt_buff, sizeof(pkt_buff), saddr, daddr,
-                               sport_be, dport_be, seq_be, ackseq_be, 0, NULL,
-                               0);
-        if (pkt_len < 0) {
-            E(T(fh_pkt6_make));
-            return -1;
-        }
-    } else {
-        E("ERROR: Unknown address family: %d", (int) daddr->sa_family);
-        return -1;
-    }
-
-    nbytes = sendto(sockfd, pkt_buff, pkt_len, 0, (struct sockaddr *) sll,
-                    sizeof(*sll));
-    if (nbytes < 0) {
-        E("ERROR: sendto(): %s", strerror(errno));
-        return -1;
-    }
-
-    return 0;
-}
-
-
 static int send_http(struct sockaddr_ll *sll, struct sockaddr *saddr,
                      struct sockaddr *daddr, uint16_t sport_be,
                      uint16_t dport_be, uint32_t seq_be, uint32_t ackseq_be)
@@ -115,6 +75,7 @@ static int send_http(struct sockaddr_ll *sll, struct sockaddr *saddr,
     int http_len, pkt_len;
     ssize_t nbytes;
     char http_buff[512], pkt_buff[1024];
+    struct sockaddr_ll sll_send;
 
     http_len = snprintf(http_buff, sizeof(http_buff), http_fmt,
                         g_ctx.hostname);
@@ -144,8 +105,14 @@ static int send_http(struct sockaddr_ll *sll, struct sockaddr *saddr,
         return -1;
     }
 
-    nbytes = sendto(sockfd, pkt_buff, pkt_len, 0, (struct sockaddr *) sll,
-                    sizeof(*sll));
+    memset(&sll_send, 0, sizeof(sll_send));
+    sll_send.sll_family = AF_PACKET;
+    sll_send.sll_protocol = sll->sll_protocol;
+    sll_send.sll_ifindex = sll->sll_ifindex;
+    memcpy(sll_send.sll_addr, sll->sll_addr, sizeof(sll_send.sll_addr));
+
+    nbytes = sendto(sockfd, pkt_buff, pkt_len, 0,
+                    (struct sockaddr *) &sll_send, sizeof(sll_send));
     if (nbytes < 0) {
         E("ERROR: sendto(): %s", strerror(errno));
         return -1;
@@ -157,7 +124,7 @@ static int send_http(struct sockaddr_ll *sll, struct sockaddr *saddr,
 
 int fh_rawsend_setup(void)
 {
-    int res, opt, sockfd;
+    int res, opt;
     const char *err_hint;
 
     sockfd = socket(AF_PACKET, SOCK_DGRAM, htons(ETH_P_ALL));
@@ -218,7 +185,7 @@ void fh_rawsend_cleanup(void)
 
 int fh_rawsend_handle(struct sockaddr_ll *sll, uint8_t *pkt_data, int pkt_len)
 {
-    uint32_t ack_new;
+    uint32_t ack_new, seq_new;
     uint16_t ethertype;
     int res, i, tcp_payload_len;
     struct tcphdr *tcph;
@@ -254,60 +221,103 @@ int fh_rawsend_handle(struct sockaddr_ll *sll, uint8_t *pkt_data, int pkt_len)
         ipaddr_to_str(daddr, dst_ip);
     }
 
-    if (tcp_payload_len > 0) {
-        E_INFO("%s:%u ===PAYLOAD(?)===> %s:%u", src_ip, ntohs(tcph->source),
-               dst_ip, ntohs(tcph->dest));
-        return 0;
-    } else if (tcph->syn && tcph->ack) {
-        E_INFO("%s:%u ===SYN-ACK===> %s:%u", src_ip, ntohs(tcph->source),
-               dst_ip, ntohs(tcph->dest));
+    if (sll->sll_pkttype == PACKET_HOST) {
+        if (tcp_payload_len > 0) {
+            E_INFO("%s:%u ===PAYLOAD(?)===> %s:%u", src_ip,
+                   ntohs(tcph->source), dst_ip, ntohs(tcph->dest));
+            return 0;
+        } else if (tcph->syn && tcph->ack) {
+            E_INFO("%s:%u ===SYN-ACK===> %s:%u", src_ip, ntohs(tcph->source),
+                   dst_ip, ntohs(tcph->dest));
 
-        ack_new = ntohl(tcph->seq);
-        ack_new++;
-        ack_new = htonl(ack_new);
+            ack_new = ntohl(tcph->seq);
+            ack_new++;
+            ack_new = htonl(ack_new);
 
-        for (i = 0; i < g_ctx.repeat; i++) {
-            res = send_ack(sll, daddr, saddr, tcph->dest, tcph->source,
-                           tcph->ack_seq, ack_new);
-            if (res < 0) {
-                E(T(send_ack));
-                return -1;
+            for (i = 0; i < g_ctx.repeat; i++) {
+                res = send_http(sll, daddr, saddr, tcph->dest, tcph->source,
+                                tcph->ack_seq, ack_new);
+                if (res < 0) {
+                    E(T(send_http));
+                    return -1;
+                }
             }
-        }
-        E_INFO("%s:%u <===ACK(*)=== %s:%u", src_ip, ntohs(tcph->source),
-               dst_ip, ntohs(tcph->dest));
+            E_INFO("%s:%u <===HTTP(*)=== %s:%u", src_ip, ntohs(tcph->source),
+                   dst_ip, ntohs(tcph->dest));
 
-        for (i = 0; i < g_ctx.repeat; i++) {
-            res = send_http(sll, daddr, saddr, tcph->dest, tcph->source,
-                            tcph->ack_seq, ack_new);
-            if (res < 0) {
-                E(T(send_http));
-                return -1;
+            return 0;
+        } else if (tcph->ack) {
+            E_INFO("%s:%u ===ACK===> %s:%u", src_ip, ntohs(tcph->source),
+                   dst_ip, ntohs(tcph->dest));
+
+            for (i = 0; i < g_ctx.repeat; i++) {
+                res = send_http(sll, daddr, saddr, tcph->dest, tcph->source,
+                                tcph->ack_seq, tcph->seq);
+                if (res < 0) {
+                    E(T(send_http));
+                    return -1;
+                }
             }
+            E_INFO("%s:%u <===HTTP(*)=== %s:%u", src_ip, ntohs(tcph->source),
+                   dst_ip, ntohs(tcph->dest));
+
+            return 0;
+        } else if (tcph->syn) {
+            E_INFO("%s:%u <===SYN=== %s:%u", src_ip, ntohs(tcph->source),
+                   dst_ip, ntohs(tcph->dest));
+
+            return 1;
+        } else {
+            E_INFO("%s:%u ===(?)===> %s:%u", src_ip, ntohs(tcph->source),
+                   dst_ip, ntohs(tcph->dest));
+
+            return 1;
         }
-        E_INFO("%s:%u <===HTTP(*)=== %s:%u", src_ip, ntohs(tcph->source),
-               dst_ip, ntohs(tcph->dest));
+    } else if (sll->sll_pkttype == PACKET_OUTGOING) {
+        if (tcp_payload_len > 0) {
+            E_INFO("%s:%u <===PAYLOAD(?)=== %s:%u", dst_ip, ntohs(tcph->dest),
+                   src_ip, ntohs(tcph->source));
 
-        return 0;
-    } else if (tcph->ack) {
-        E_INFO("%s:%u ===ACK===> %s:%u", src_ip, ntohs(tcph->source), dst_ip,
-               ntohs(tcph->dest));
+            return 0;
+        } else if (tcph->syn && tcph->ack) {
+            E_INFO("%s:%u <===SYN-ACK=== %s:%u", dst_ip, ntohs(tcph->dest),
+                   src_ip, ntohs(tcph->source));
 
-        for (i = 0; i < g_ctx.repeat; i++) {
-            res = send_http(sll, daddr, saddr, tcph->dest, tcph->source,
-                            tcph->ack_seq, tcph->seq);
-            if (res < 0) {
-                E(T(send_http));
-                return -1;
+            seq_new = ntohl(tcph->seq);
+            seq_new++;
+            seq_new = htonl(seq_new);
+
+            ack_new = ntohl(tcph->ack_seq);
+            ack_new++;
+            ack_new = htonl(ack_new);
+
+            for (i = 0; i < g_ctx.repeat; i++) {
+                res = send_http(sll, saddr, daddr, tcph->source, tcph->dest,
+                                seq_new, ack_new);
+                if (res < 0) {
+                    E(T(send_http));
+                    return -1;
+                }
             }
-        }
-        E_INFO("%s:%u <===HTTP(*)=== %s:%u", src_ip, ntohs(tcph->source),
-               dst_ip, ntohs(tcph->dest));
+            E_INFO("%s:%u <===HTTP(*)=== %s:%u", dst_ip, ntohs(tcph->dest),
+                   src_ip, ntohs(tcph->source));
 
-        return 0;
+            return 0;
+        } else if (tcph->syn) {
+            E_INFO("%s:%u <===SYN=== %s:%u", src_ip, ntohs(tcph->source),
+                   dst_ip, ntohs(tcph->dest));
+
+            return 1;
+        } else {
+            E_INFO("%s:%u <===(?)=== %s:%u", src_ip, ntohs(tcph->source),
+                   dst_ip, ntohs(tcph->dest));
+
+            return 1;
+        }
     } else {
-        E_INFO("%s:%u ===(?)===> %s:%u", src_ip, ntohs(tcph->source), dst_ip,
+        E_INFO("%s:%u ===(?)=== %s:%u", src_ip, ntohs(tcph->source), dst_ip,
                ntohs(tcph->dest));
+
         return 1;
     }
 }

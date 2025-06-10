@@ -81,6 +81,7 @@ static int callback(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
     sll.sll_family = AF_PACKET;
     sll.sll_protocol = ph->hw_protocol;
     sll.sll_ifindex = ifindex;
+    sll.sll_pkttype = PACKET_HOST;
 
     /* hwph can be null on PPP interfaces */
     hwph = nfq_get_packet_hw(nfa);

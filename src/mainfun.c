@@ -37,11 +37,12 @@
 #include "nfqueue.h"
 #include "nfrules.h"
 #include "process.h"
+#include "rawrecv.h"
 #include "rawsend.h"
 #include "signals.h"
 
 #ifndef VERSION
-#define VERSION "dev"
+#define VERSION "dev-bpf"
 #endif /* VERSION */
 
 static void print_usage(const char *name)
@@ -57,8 +58,9 @@ static void print_usage(const char *name)
             "  -h <hostname>      hostname for obfuscation (required)\n"
             "  -i <interface>     network interface name (required)\n"
             "  -k                 kill the running process\n"
-            "  -m <mark>          fwmark for bypassing the queue\n"
+            "  -m <mark>          fwmark for skipping the queue\n"
             "  -n <number>        netfilter queue number\n"
+            "  -p                 bypass mode\n"
             "  -r <repeat>        duplicate generated packets for <repeat> "
             "times\n"
             "  -s                 enable silent mode\n"
@@ -84,7 +86,7 @@ int main(int argc, char *argv[])
 
     exitcode = EXIT_FAILURE;
 
-    while ((opt = getopt(argc, argv, "46dfh:i:km:n:r:st:w:x:z")) != -1) {
+    while ((opt = getopt(argc, argv, "46dfh:i:km:n:pr:st:w:x:z")) != -1) {
         switch (opt) {
             case '4':
                 g_ctx.use_ipv4 = 1;
@@ -143,6 +145,10 @@ int main(int argc, char *argv[])
                     return EXIT_FAILURE;
                 }
                 g_ctx.nfqnum = tmp;
+                break;
+
+            case 'p':
+                g_ctx.rawrecv = 1;
                 break;
 
             case 'r':
@@ -270,16 +276,24 @@ int main(int argc, char *argv[])
         goto cleanup_logger;
     }
 
-    res = fh_nfq_setup();
-    if (res < 0) {
-        EE(T(fh_nfq_setup));
-        goto cleanup_rawsend;
-    }
+    if (g_ctx.rawrecv) {
+        res = fh_rawrecv_setup();
+        if (res < 0) {
+            EE(T(fh_rawrecv_setup));
+            goto cleanup_rawrecv;
+        }
+    } else {
+        res = fh_nfq_setup();
+        if (res < 0) {
+            EE(T(fh_nfq_setup));
+            goto cleanup_rawsend;
+        }
 
-    res = fh_nfrules_setup();
-    if (res < 0) {
-        EE(T(fh_nfrules_setup));
-        goto cleanup_nfq;
+        res = fh_nfrules_setup();
+        if (res < 0) {
+            EE(T(fh_nfrules_setup));
+            goto cleanup_nfq;
+        }
     }
 
     res = fh_signal_setup();
@@ -306,20 +320,37 @@ int main(int argc, char *argv[])
     /*
         Main Loop
     */
-    res = fh_nfq_loop();
-    if (res < 0) {
-        EE(T(fh_nfq_loop));
-        goto cleanup_nfrules;
+    if (g_ctx.rawrecv) {
+        res = fh_rawrecv_loop();
+        if (res < 0) {
+            EE(T(fh_rawrecv_loop));
+            goto cleanup_rawrecv;
+        }
+    } else {
+        res = fh_nfq_loop();
+        if (res < 0) {
+            EE(T(fh_nfq_loop));
+            goto cleanup_nfrules;
+        }
     }
 
     E("exiting normally...");
     exitcode = EXIT_SUCCESS;
 
 cleanup_nfrules:
-    fh_nfrules_cleanup();
+    if (!g_ctx.rawrecv) {
+        fh_nfrules_cleanup();
+    }
 
 cleanup_nfq:
-    fh_nfq_cleanup();
+    if (!g_ctx.rawrecv) {
+        fh_nfq_cleanup();
+    }
+
+cleanup_rawrecv:
+    if (g_ctx.rawrecv) {
+        fh_rawrecv_cleanup();
+    }
 
 cleanup_rawsend:
     fh_rawsend_cleanup();
