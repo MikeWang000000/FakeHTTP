@@ -25,6 +25,7 @@ Payload Options:
   -b <file>          use TCP payload from binary file
   -e <hostname>      hostname for HTTPS obfuscation
   -h <hostname>      hostname for HTTP obfuscation
+  -p                 promiscuous mode: randomize built-in protocol payloads
 
 General Options:
   -0                 process inbound connections

@@ -63,6 +63,8 @@ static void print_usage(const char *name)
         "  -b <file>          use TCP payload from binary file\n"
         "  -e <hostname>      hostname for HTTPS obfuscation\n"
         "  -h <hostname>      hostname for HTTP obfuscation\n"
+        "  -p                 promiscuous mode: randomize built-in protocol "
+        "payloads\n"
         "\n"
         "General Options:\n"
         "  -0                 process inbound connections\n"
@@ -125,7 +127,7 @@ int main(int argc, char *argv[])
 
     plinfo_cnt = iface_cnt = 0;
 
-    while ((opt = getopt(argc, argv, "0146ab:de:fgh:i:km:n:r:st:w:x:y:z")) !=
+    while ((opt = getopt(argc, argv, "0146ab:de:fgh:i:km:n:pr:st:w:x:y:z")) !=
            -1) {
         switch (opt) {
             case '0':
@@ -248,6 +250,10 @@ int main(int argc, char *argv[])
                 g_ctx.nfqnum = tmp;
                 break;
 
+            case 'p':
+                g_ctx.promisc = 1;
+                break;
+
             case 'r':
                 tmp = strtoull(optarg, NULL, 0);
                 if (!tmp || tmp > 10) {
@@ -340,8 +346,9 @@ int main(int argc, char *argv[])
         goto free_mem;
     }
 
-    if (!plinfo_cnt) {
-        fprintf(stderr, "%s: option -h or -b is required.\n", argv[0]);
+    if (!plinfo_cnt && !g_ctx.promisc) {
+        fprintf(stderr, "%s: option -h, -e, -b, or -p is required.\n",
+                argv[0]);
         print_usage(argv[0]);
         goto free_mem;
     }
