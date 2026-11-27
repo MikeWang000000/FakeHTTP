@@ -393,9 +393,14 @@ int fh_rawsend_handle(struct sockaddr_ll *sll, uint8_t *pkt_data, int pkt_len,
 
         th_payload_get(&payload, &payload_len);
 
+        seq_new = tcph->ack_seq;
+        if (g_ctx.badseq_offset) {
+            seq_new = htonl(ntohl(seq_new) - g_ctx.badseq_offset);
+        }
+
         for (i = 0; i < g_ctx.repeat; i++) {
             res = send_payload(sll, daddr, saddr, snd_ttl, tcph->dest,
-                               tcph->source, tcph->ack_seq, ack_new, 0);
+                               tcph->source, seq_new, ack_new, 0);
             if (res < 0) {
                 E(T(send_payload));
                 return -1;
@@ -421,6 +426,9 @@ int fh_rawsend_handle(struct sockaddr_ll *sll, uint8_t *pkt_data, int pkt_len,
 
         seq_new = ntohl(tcph->seq);
         seq_new++;
+        if (g_ctx.badseq_offset) {
+            seq_new -= g_ctx.badseq_offset;
+        }
         seq_new = htonl(seq_new);
 
         snd_ttl = g_ctx.ttl;

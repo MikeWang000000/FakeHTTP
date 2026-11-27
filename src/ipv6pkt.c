@@ -92,10 +92,10 @@ int fh_pkt6_make(uint8_t *buffer, size_t buffer_size, struct sockaddr *saddr,
                  uint16_t dport_be, uint32_t seq_be, uint32_t ackseq_be,
                  int psh, uint8_t *tcp_payload, size_t tcp_payload_size)
 {
-    size_t pkt_len;
+    size_t pkt_len, tcpopt_len;
     struct ip6_hdr *ip6h;
     struct tcphdr *tcph;
-    uint8_t *tcppl;
+    uint8_t *tcpopt, *tcppl;
     struct sockaddr_in6 *saddr_in6, *daddr_in6;
 
     if (saddr->sa_family != AF_INET6 || daddr->sa_family != AF_INET6) {
@@ -106,7 +106,8 @@ int fh_pkt6_make(uint8_t *buffer, size_t buffer_size, struct sockaddr *saddr,
     saddr_in6 = (struct sockaddr_in6 *) saddr;
     daddr_in6 = (struct sockaddr_in6 *) daddr;
 
-    pkt_len = sizeof(*ip6h) + sizeof(*tcph) + tcp_payload_size;
+    tcpopt_len = g_ctx.md5sig ? 20 : 0;
+    pkt_len = sizeof(*ip6h) + sizeof(*tcph) + tcpopt_len + tcp_payload_size;
     if (buffer_size < pkt_len + 1) {
         E("ERROR: %s", strerror(ENOBUFS));
         return -1;
@@ -114,13 +115,14 @@ int fh_pkt6_make(uint8_t *buffer, size_t buffer_size, struct sockaddr *saddr,
 
     ip6h = (struct ip6_hdr *) buffer;
     tcph = (struct tcphdr *) (buffer + sizeof(*ip6h));
-    tcppl = buffer + sizeof(*ip6h) + sizeof(*tcph);
+    tcpopt = buffer + sizeof(*ip6h) + sizeof(*tcph);
+    tcppl = tcpopt + tcpopt_len;
 
     memset(ip6h, 0, sizeof(*ip6h));
     ip6h->ip6_flow = htonl((6U << 28) /* version */ |
                            ((uint32_t) (g_ctx.dscp << 2) << 20) /* traffic */ |
                            0 /* flow */);
-    ip6h->ip6_plen = htons(sizeof(*tcph) + tcp_payload_size);
+    ip6h->ip6_plen = htons(sizeof(*tcph) + tcpopt_len + tcp_payload_size);
     ip6h->ip6_nxt = IPPROTO_TCP;
     ip6h->ip6_hops = ttl;
     memcpy(&ip6h->ip6_src, &saddr_in6->sin6_addr, sizeof(struct in6_addr));
@@ -131,12 +133,20 @@ int fh_pkt6_make(uint8_t *buffer, size_t buffer_size, struct sockaddr *saddr,
     tcph->dest = dport_be;
     tcph->seq = seq_be;
     tcph->ack_seq = ackseq_be;
-    tcph->doff = sizeof(*tcph) / 4;
+    tcph->doff = (sizeof(*tcph) + tcpopt_len) / 4;
     tcph->psh = psh;
     tcph->ack = 1;
     tcph->window = htons(0x0080);
     tcph->check = 0;
     tcph->urg_ptr = 0;
+
+    if (tcpopt_len) {
+        memset(tcpopt, 0, tcpopt_len);
+        tcpopt[0] = 19; /* TCP MD5 Signature */
+        tcpopt[1] = 18;
+        tcpopt[18] = 1; /* NOP */
+        tcpopt[19] = 1; /* NOP */
+    }
 
     if (tcp_payload_size) {
         memcpy(tcppl, tcp_payload, tcp_payload_size);

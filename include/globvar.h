@@ -50,6 +50,8 @@ struct fh_context {
     /* -z */ int use_iptables;
     /* -B */ int badsum;
     /* -D */ uint8_t dscp;
+    /* -M */ int md5sig;
+    /* -Q */ uint32_t badseq_offset;
 };
 
 extern struct fh_context g_ctx;

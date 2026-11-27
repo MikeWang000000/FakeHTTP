@@ -96,10 +96,10 @@ int fh_pkt4_make(uint8_t *buffer, size_t buffer_size, struct sockaddr *saddr,
                  uint16_t dport_be, uint32_t seq_be, uint32_t ackseq_be,
                  int psh, uint8_t *tcp_payload, size_t tcp_payload_size)
 {
-    size_t pkt_len;
+    size_t pkt_len, tcpopt_len;
     struct iphdr *iph;
     struct tcphdr *tcph;
-    uint8_t *tcppl;
+    uint8_t *tcpopt, *tcppl;
     struct sockaddr_in *saddr_in, *daddr_in;
 
     if (saddr->sa_family != AF_INET || daddr->sa_family != AF_INET) {
@@ -110,7 +110,8 @@ int fh_pkt4_make(uint8_t *buffer, size_t buffer_size, struct sockaddr *saddr,
     saddr_in = (struct sockaddr_in *) saddr;
     daddr_in = (struct sockaddr_in *) daddr;
 
-    pkt_len = sizeof(*iph) + sizeof(*tcph) + tcp_payload_size;
+    tcpopt_len = g_ctx.md5sig ? 20 : 0;
+    pkt_len = sizeof(*iph) + sizeof(*tcph) + tcpopt_len + tcp_payload_size;
     if (buffer_size < pkt_len + 1) {
         E("ERROR: %s", strerror(ENOBUFS));
         return -1;
@@ -118,7 +119,8 @@ int fh_pkt4_make(uint8_t *buffer, size_t buffer_size, struct sockaddr *saddr,
 
     iph = (struct iphdr *) buffer;
     tcph = (struct tcphdr *) (buffer + sizeof(*iph));
-    tcppl = buffer + sizeof(*iph) + sizeof(*tcph);
+    tcpopt = buffer + sizeof(*iph) + sizeof(*tcph);
+    tcppl = tcpopt + tcpopt_len;
 
     memset(iph, 0, sizeof(*iph));
     iph->version = 4;
@@ -138,12 +140,20 @@ int fh_pkt4_make(uint8_t *buffer, size_t buffer_size, struct sockaddr *saddr,
     tcph->dest = dport_be;
     tcph->seq = seq_be;
     tcph->ack_seq = ackseq_be;
-    tcph->doff = sizeof(*tcph) / 4;
+    tcph->doff = (sizeof(*tcph) + tcpopt_len) / 4;
     tcph->psh = psh;
     tcph->ack = 1;
     tcph->window = htons(0x0080);
     tcph->check = 0;
     tcph->urg_ptr = 0;
+
+    if (tcpopt_len) {
+        memset(tcpopt, 0, tcpopt_len);
+        tcpopt[0] = 19; /* TCP MD5 Signature */
+        tcpopt[1] = 18;
+        tcpopt[18] = 1; /* NOP */
+        tcpopt[19] = 1; /* NOP */
+    }
 
     if (tcp_payload_size) {
         memcpy(tcppl, tcp_payload, tcp_payload_size);

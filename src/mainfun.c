@@ -87,6 +87,9 @@ static void print_usage(const char *name)
         "  -z                 use iptables commands instead of nft\n"
         "  -B                 corrupt TCP checksum on generated packets\n"
         "  -D <dscp>          set IP DSCP value (0-63) on generated packets\n"
+        "  -M                 add fake TCP MD5 signature option (kind 19)\n"
+        "  -Q <offset>        subtract <offset> from TCP seq on generated "
+        "packets\n"
         "\n"
         "FakeHTTP version " VERSION "\n";
 
@@ -128,7 +131,7 @@ int main(int argc, char *argv[])
     plinfo_cnt = iface_cnt = 0;
 
     while ((opt = getopt(argc, argv,
-                         "0146ab:de:fgh:i:km:n:r:st:w:x:y:zBD:")) != -1) {
+                         "0146ab:de:fgh:i:km:n:r:st:w:x:y:zBD:MQ:")) != -1) {
         switch (opt) {
             case '0':
                 g_ctx.inbound = 1;
@@ -320,6 +323,20 @@ int main(int argc, char *argv[])
                     goto free_mem;
                 }
                 g_ctx.dscp = tmp;
+                break;
+
+            case 'M':
+                g_ctx.md5sig = 1;
+                break;
+
+            case 'Q':
+                tmp = strtoull(optarg, NULL, 0);
+                if (!tmp || tmp > UINT32_MAX) {
+                    fprintf(stderr, "%s: invalid value for -Q.\n", argv[0]);
+                    print_usage(argv[0]);
+                    goto free_mem;
+                }
+                g_ctx.badseq_offset = tmp;
                 break;
 
             default:
