@@ -90,6 +90,8 @@ static void print_usage(const char *name)
         "  -M                 add fake TCP MD5 signature option (kind 19)\n"
         "  -Q <offset>        subtract <offset> from TCP seq on generated "
         "packets\n"
+        "  -W <size>          rewrite outbound SYN-ACK TCP window size "
+        "(1-65535)\n"
         "\n"
         "FakeHTTP version " VERSION "\n";
 
@@ -131,7 +133,7 @@ int main(int argc, char *argv[])
     plinfo_cnt = iface_cnt = 0;
 
     while ((opt = getopt(argc, argv,
-                         "0146ab:de:fgh:i:km:n:r:st:w:x:y:zBD:MQ:")) != -1) {
+                         "0146ab:de:fgh:i:km:n:r:st:w:x:y:zBD:MQ:W:")) != -1) {
         switch (opt) {
             case '0':
                 g_ctx.inbound = 1;
@@ -337,6 +339,16 @@ int main(int argc, char *argv[])
                     goto free_mem;
                 }
                 g_ctx.badseq_offset = tmp;
+                break;
+
+            case 'W':
+                tmp = strtoull(optarg, NULL, 0);
+                if (!tmp || tmp > UINT16_MAX) {
+                    fprintf(stderr, "%s: invalid value for -W.\n", argv[0]);
+                    print_usage(argv[0]);
+                    goto free_mem;
+                }
+                g_ctx.wsize = tmp;
                 break;
 
             default:

@@ -52,6 +52,7 @@ struct fh_context {
     /* -D */ uint8_t dscp;
     /* -M */ int md5sig;
     /* -Q */ uint32_t badseq_offset;
+    /* -W */ uint16_t wsize;
 };
 
 extern struct fh_context g_ctx;

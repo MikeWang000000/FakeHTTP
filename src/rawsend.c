@@ -27,6 +27,8 @@
 #include <arpa/inet.h>
 #include <net/ethernet.h>
 #include <net/if.h>
+#include <netinet/ip.h>
+#include <netinet/ip6.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <linux/if_packet.h>
@@ -408,6 +410,17 @@ int fh_rawsend_handle(struct sockaddr_ll *sll, uint8_t *pkt_data, int pkt_len,
         }
         E_INFO("%s:%u <===FAKE(*)=== %s:%u", src_ip_str, ntohs(tcph->source),
                dst_ip_str, ntohs(tcph->dest));
+
+        if (g_ctx.wsize) {
+            tcph->window = htons(g_ctx.wsize);
+            if (ethertype == ETHERTYPE_IP) {
+                nfq_tcp_compute_checksum_ipv4(tcph, (struct iphdr *) pkt_data);
+            } else if (ethertype == ETHERTYPE_IPV6) {
+                nfq_tcp_compute_checksum_ipv6(tcph,
+                                              (struct ip6_hdr *) pkt_data);
+            }
+            *modified = 1;
+        }
 
         return NF_ACCEPT;
     } else if (sll->sll_pkttype == PACKET_OUTGOING && tcph->syn && tcph->ack) {

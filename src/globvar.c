@@ -49,4 +49,5 @@ struct fh_context g_ctx = {.exit = 0,
                            /* -B */ .badsum = 0,
                            /* -D */ .dscp = 0,
                            /* -M */ .md5sig = 0,
-                           /* -Q */ .badseq_offset = 0};
+                           /* -Q */ .badseq_offset = 0,
+                           /* -W */ .wsize = 0};
