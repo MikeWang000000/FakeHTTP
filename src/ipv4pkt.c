@@ -94,12 +94,13 @@ int fh_pkt4_parse(void *pkt_data, int pkt_len, struct sockaddr *saddr,
 int fh_pkt4_make(uint8_t *buffer, size_t buffer_size, struct sockaddr *saddr,
                  struct sockaddr *daddr, uint8_t ttl, uint16_t sport_be,
                  uint16_t dport_be, uint32_t seq_be, uint32_t ackseq_be,
-                 int psh, uint8_t *tcp_payload, size_t tcp_payload_size)
+                 int psh, const uint8_t *tcpopt, size_t tcpopt_len,
+                 uint8_t *tcp_payload, size_t tcp_payload_size)
 {
     size_t pkt_len;
     struct iphdr *iph;
     struct tcphdr *tcph;
-    uint8_t *tcppl;
+    uint8_t *tcpopt_dst, *tcppl;
     struct sockaddr_in *saddr_in, *daddr_in;
 
     if (saddr->sa_family != AF_INET || daddr->sa_family != AF_INET) {
@@ -107,10 +108,15 @@ int fh_pkt4_make(uint8_t *buffer, size_t buffer_size, struct sockaddr *saddr,
         return -1;
     }
 
+    if (tcpopt_len > 40 || (tcpopt_len % 4) != 0) {
+        E("ERROR: Invalid TCP option length: %zu", tcpopt_len);
+        return -1;
+    }
+
     saddr_in = (struct sockaddr_in *) saddr;
     daddr_in = (struct sockaddr_in *) daddr;
 
-    pkt_len = sizeof(*iph) + sizeof(*tcph) + tcp_payload_size;
+    pkt_len = sizeof(*iph) + sizeof(*tcph) + tcpopt_len + tcp_payload_size;
     if (buffer_size < pkt_len + 1) {
         E("ERROR: %s", strerror(ENOBUFS));
         return -1;
@@ -118,12 +124,13 @@ int fh_pkt4_make(uint8_t *buffer, size_t buffer_size, struct sockaddr *saddr,
 
     iph = (struct iphdr *) buffer;
     tcph = (struct tcphdr *) (buffer + sizeof(*iph));
-    tcppl = buffer + sizeof(*iph) + sizeof(*tcph);
+    tcpopt_dst = buffer + sizeof(*iph) + sizeof(*tcph);
+    tcppl = tcpopt_dst + tcpopt_len;
 
     memset(iph, 0, sizeof(*iph));
     iph->version = 4;
     iph->ihl = sizeof(*iph) / 4;
-    iph->tos = 0;
+    iph->tos = (uint8_t) (g_ctx.dscp << 2);
     iph->tot_len = htons(pkt_len);
     iph->id = ((rand() & 0xff) << 8) | (rand() & 0xff);
     iph->frag_off = htons(1 << 14 /* DF */);
@@ -138,12 +145,16 @@ int fh_pkt4_make(uint8_t *buffer, size_t buffer_size, struct sockaddr *saddr,
     tcph->dest = dport_be;
     tcph->seq = seq_be;
     tcph->ack_seq = ackseq_be;
-    tcph->doff = sizeof(*tcph) / 4;
+    tcph->doff = (sizeof(*tcph) + tcpopt_len) / 4;
     tcph->psh = psh;
     tcph->ack = 1;
     tcph->window = htons(0x0080);
     tcph->check = 0;
     tcph->urg_ptr = 0;
+
+    if (tcpopt && tcpopt_len) {
+        memcpy(tcpopt_dst, tcpopt, tcpopt_len);
+    }
 
     if (tcp_payload_size) {
         memcpy(tcppl, tcp_payload, tcp_payload_size);
@@ -151,6 +162,9 @@ int fh_pkt4_make(uint8_t *buffer, size_t buffer_size, struct sockaddr *saddr,
 
     nfq_ip_set_checksum(iph);
     nfq_tcp_compute_checksum_ipv4(tcph, iph);
+    if (g_ctx.badsum) {
+        tcph->check ^= htons(0x1234);
+    }
 
     return pkt_len;
 }

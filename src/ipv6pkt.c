@@ -90,12 +90,13 @@ int fh_pkt6_parse(void *pkt_data, int pkt_len, struct sockaddr *saddr,
 int fh_pkt6_make(uint8_t *buffer, size_t buffer_size, struct sockaddr *saddr,
                  struct sockaddr *daddr, uint8_t ttl, uint16_t sport_be,
                  uint16_t dport_be, uint32_t seq_be, uint32_t ackseq_be,
-                 int psh, uint8_t *tcp_payload, size_t tcp_payload_size)
+                 int psh, const uint8_t *tcpopt, size_t tcpopt_len,
+                 uint8_t *tcp_payload, size_t tcp_payload_size)
 {
     size_t pkt_len;
     struct ip6_hdr *ip6h;
     struct tcphdr *tcph;
-    uint8_t *tcppl;
+    uint8_t *tcpopt_dst, *tcppl;
     struct sockaddr_in6 *saddr_in6, *daddr_in6;
 
     if (saddr->sa_family != AF_INET6 || daddr->sa_family != AF_INET6) {
@@ -103,10 +104,15 @@ int fh_pkt6_make(uint8_t *buffer, size_t buffer_size, struct sockaddr *saddr,
         return -1;
     }
 
+    if (tcpopt_len > 40 || (tcpopt_len % 4) != 0) {
+        E("ERROR: Invalid TCP option length: %zu", tcpopt_len);
+        return -1;
+    }
+
     saddr_in6 = (struct sockaddr_in6 *) saddr;
     daddr_in6 = (struct sockaddr_in6 *) daddr;
 
-    pkt_len = sizeof(*ip6h) + sizeof(*tcph) + tcp_payload_size;
+    pkt_len = sizeof(*ip6h) + sizeof(*tcph) + tcpopt_len + tcp_payload_size;
     if (buffer_size < pkt_len + 1) {
         E("ERROR: %s", strerror(ENOBUFS));
         return -1;
@@ -114,12 +120,14 @@ int fh_pkt6_make(uint8_t *buffer, size_t buffer_size, struct sockaddr *saddr,
 
     ip6h = (struct ip6_hdr *) buffer;
     tcph = (struct tcphdr *) (buffer + sizeof(*ip6h));
-    tcppl = buffer + sizeof(*ip6h) + sizeof(*tcph);
+    tcpopt_dst = buffer + sizeof(*ip6h) + sizeof(*tcph);
+    tcppl = tcpopt_dst + tcpopt_len;
 
     memset(ip6h, 0, sizeof(*ip6h));
-    ip6h->ip6_flow = htonl((6 << 28) /* version */ | (0 << 20) /* traffic */ |
+    ip6h->ip6_flow = htonl((6U << 28) /* version */ |
+                           ((uint32_t) (g_ctx.dscp << 2) << 20) /* traffic */ |
                            0 /* flow */);
-    ip6h->ip6_plen = htons(sizeof(*tcph) + tcp_payload_size);
+    ip6h->ip6_plen = htons(sizeof(*tcph) + tcpopt_len + tcp_payload_size);
     ip6h->ip6_nxt = IPPROTO_TCP;
     ip6h->ip6_hops = ttl;
     memcpy(&ip6h->ip6_src, &saddr_in6->sin6_addr, sizeof(struct in6_addr));
@@ -130,18 +138,25 @@ int fh_pkt6_make(uint8_t *buffer, size_t buffer_size, struct sockaddr *saddr,
     tcph->dest = dport_be;
     tcph->seq = seq_be;
     tcph->ack_seq = ackseq_be;
-    tcph->doff = sizeof(*tcph) / 4;
+    tcph->doff = (sizeof(*tcph) + tcpopt_len) / 4;
     tcph->psh = psh;
     tcph->ack = 1;
     tcph->window = htons(0x0080);
     tcph->check = 0;
     tcph->urg_ptr = 0;
 
+    if (tcpopt && tcpopt_len) {
+        memcpy(tcpopt_dst, tcpopt, tcpopt_len);
+    }
+
     if (tcp_payload_size) {
         memcpy(tcppl, tcp_payload, tcp_payload_size);
     }
 
     nfq_tcp_compute_checksum_ipv6(tcph, ip6h);
+    if (g_ctx.badsum) {
+        tcph->check ^= htons(0x1234);
+    }
 
     return pkt_len;
 }
