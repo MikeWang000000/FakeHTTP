@@ -31,6 +31,7 @@ int fh_pkt6_parse(void *pkt_data, int pkt_len, struct sockaddr *saddr,
 int fh_pkt6_make(uint8_t *buffer, size_t buffer_size, struct sockaddr *saddr,
                  struct sockaddr *daddr, uint8_t ttl, uint16_t sport_be,
                  uint16_t dport_be, uint32_t seq_be, uint32_t ackseq_be,
-                 int psh, uint8_t *tcp_payload, size_t tcp_payload_size);
+                 int psh, const uint8_t *tcpopt, size_t tcpopt_len,
+                 uint8_t *tcp_payload, size_t tcp_payload_size);
 
 #endif /* FH_IPV6PKT_H */

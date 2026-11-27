@@ -94,12 +94,13 @@ int fh_pkt4_parse(void *pkt_data, int pkt_len, struct sockaddr *saddr,
 int fh_pkt4_make(uint8_t *buffer, size_t buffer_size, struct sockaddr *saddr,
                  struct sockaddr *daddr, uint8_t ttl, uint16_t sport_be,
                  uint16_t dport_be, uint32_t seq_be, uint32_t ackseq_be,
-                 int psh, uint8_t *tcp_payload, size_t tcp_payload_size)
+                 int psh, const uint8_t *tcpopt, size_t tcpopt_len,
+                 uint8_t *tcp_payload, size_t tcp_payload_size)
 {
-    size_t pkt_len, tcpopt_len;
+    size_t pkt_len;
     struct iphdr *iph;
     struct tcphdr *tcph;
-    uint8_t *tcpopt, *tcppl;
+    uint8_t *tcpopt_dst, *tcppl;
     struct sockaddr_in *saddr_in, *daddr_in;
 
     if (saddr->sa_family != AF_INET || daddr->sa_family != AF_INET) {
@@ -107,10 +108,14 @@ int fh_pkt4_make(uint8_t *buffer, size_t buffer_size, struct sockaddr *saddr,
         return -1;
     }
 
+    if (tcpopt_len > 40 || (tcpopt_len % 4) != 0) {
+        E("ERROR: Invalid TCP option length: %zu", tcpopt_len);
+        return -1;
+    }
+
     saddr_in = (struct sockaddr_in *) saddr;
     daddr_in = (struct sockaddr_in *) daddr;
 
-    tcpopt_len = g_ctx.md5sig ? 20 : 0;
     pkt_len = sizeof(*iph) + sizeof(*tcph) + tcpopt_len + tcp_payload_size;
     if (buffer_size < pkt_len + 1) {
         E("ERROR: %s", strerror(ENOBUFS));
@@ -119,8 +124,8 @@ int fh_pkt4_make(uint8_t *buffer, size_t buffer_size, struct sockaddr *saddr,
 
     iph = (struct iphdr *) buffer;
     tcph = (struct tcphdr *) (buffer + sizeof(*iph));
-    tcpopt = buffer + sizeof(*iph) + sizeof(*tcph);
-    tcppl = tcpopt + tcpopt_len;
+    tcpopt_dst = buffer + sizeof(*iph) + sizeof(*tcph);
+    tcppl = tcpopt_dst + tcpopt_len;
 
     memset(iph, 0, sizeof(*iph));
     iph->version = 4;
@@ -147,12 +152,8 @@ int fh_pkt4_make(uint8_t *buffer, size_t buffer_size, struct sockaddr *saddr,
     tcph->check = 0;
     tcph->urg_ptr = 0;
 
-    if (tcpopt_len) {
-        memset(tcpopt, 0, tcpopt_len);
-        tcpopt[0] = 19; /* TCP MD5 Signature */
-        tcpopt[1] = 18;
-        tcpopt[18] = 1; /* NOP */
-        tcpopt[19] = 1; /* NOP */
+    if (tcpopt && tcpopt_len) {
+        memcpy(tcpopt_dst, tcpopt, tcpopt_len);
     }
 
     if (tcp_payload_size) {

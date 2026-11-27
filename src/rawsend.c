@@ -209,9 +209,76 @@ close_socket:
 }
 
 
+static int extract_tcp_ts(const struct tcphdr *tcph, uint32_t *tsval_be,
+                          uint32_t *tsecr_be)
+{
+    size_t i = 0, tcpopt_len;
+    const uint8_t *tcpopt_data;
+    uint8_t kind, len;
+
+    tcpopt_len = tcph->doff * 4 - sizeof(*tcph);
+    tcpopt_data = (const uint8_t *) tcph + sizeof(*tcph);
+
+    while (i < tcpopt_len) {
+        kind = tcpopt_data[i];
+        if (kind == 0) {
+            break;
+        }
+        if (kind == 1) {
+            i++;
+            continue;
+        }
+        if (i + 1 >= tcpopt_len) {
+            break;
+        }
+        len = tcpopt_data[i + 1];
+        if (len < 2 || i + len > tcpopt_len) {
+            break;
+        }
+        if (kind == 8 && len == 10) {
+            memcpy(tsval_be, &tcpopt_data[i + 2], 4);
+            memcpy(tsecr_be, &tcpopt_data[i + 6], 4);
+            return 1;
+        }
+        i += len;
+    }
+
+    return 0;
+}
+
+
+static void build_tcp_options(uint8_t *buf, size_t *out_len, int use_ts,
+                              uint32_t fake_tsval_be, uint32_t fake_tsecr_be)
+{
+    size_t off = 0;
+
+    if (g_ctx.md5sig) {
+        memset(buf + off, 0, 20);
+        buf[off] = 19; /* TCP MD5 Signature */
+        buf[off + 1] = 18;
+        buf[off + 18] = 1; /* NOP */
+        buf[off + 19] = 1; /* NOP */
+        off += 20;
+    }
+
+    if (use_ts) {
+        buf[off] = 1; /* NOP */
+        buf[off + 1] = 1; /* NOP */
+        buf[off + 2] = 8; /* Timestamps */
+        buf[off + 3] = 10;
+        memcpy(buf + off + 4, &fake_tsval_be, 4);
+        memcpy(buf + off + 8, &fake_tsecr_be, 4);
+        off += 12;
+    }
+
+    *out_len = off;
+}
+
+
 static int send_payload(struct sockaddr_ll *sll, struct sockaddr *saddr,
                         struct sockaddr *daddr, uint8_t ttl, uint16_t sport_be,
                         uint16_t dport_be, uint32_t seq_be, uint32_t ackseq_be,
+                        const uint8_t *tcpopt, size_t tcpopt_len,
                         int need_snat)
 {
     int pkt_len;
@@ -221,7 +288,7 @@ static int send_payload(struct sockaddr_ll *sll, struct sockaddr *saddr,
     if (daddr->sa_family == AF_INET) {
         pkt_len = fh_pkt4_make(pkt_buff, sizeof(pkt_buff), saddr, daddr, ttl,
                                sport_be, dport_be, seq_be, ackseq_be, 1,
-                               payload, payload_len);
+                               tcpopt, tcpopt_len, payload, payload_len);
         if (pkt_len < 0) {
             E(T(fh_pkt4_make));
             return -1;
@@ -229,7 +296,7 @@ static int send_payload(struct sockaddr_ll *sll, struct sockaddr *saddr,
     } else if (daddr->sa_family == AF_INET6) {
         pkt_len = fh_pkt6_make(pkt_buff, sizeof(pkt_buff), saddr, daddr, ttl,
                                sport_be, dport_be, seq_be, ackseq_be, 1,
-                               payload, payload_len);
+                               tcpopt, tcpopt_len, payload, payload_len);
         if (pkt_len < 0) {
             E(T(fh_pkt6_make));
             return -1;
@@ -322,10 +389,12 @@ void fh_rawsend_cleanup(void)
 int fh_rawsend_handle(struct sockaddr_ll *sll, uint8_t *pkt_data, int pkt_len,
                       int *modified)
 {
-    uint32_t seq_new, ack_new;
+    uint32_t seq_new, ack_new, tsval_be, tsecr_be, fake_tsval_be, fake_tsecr_be;
     uint16_t ethertype;
-    int res, i, src_payload_len, hop, srcinfo_unavail;
+    int res, i, src_payload_len, hop, srcinfo_unavail, ts_found, has_fooling;
     uint8_t src_ttl, snd_ttl;
+    uint8_t tcpopt_buf[40];
+    size_t tcpopt_len;
     struct tcphdr *tcph;
     char src_ip_str[INET6_ADDRSTRLEN], dst_ip_str[INET6_ADDRSTRLEN];
     struct sockaddr_storage saddr_store, daddr_store;
@@ -381,19 +450,37 @@ int fh_rawsend_handle(struct sockaddr_ll *sll, uint8_t *pkt_data, int pkt_len,
         ack_new++;
         ack_new = htonl(ack_new);
 
-        snd_ttl = g_ctx.ttl;
+        ts_found = 0;
+        fake_tsval_be = 0;
+        fake_tsecr_be = 0;
+        if (g_ctx.paws_ts && extract_tcp_ts(tcph, &tsval_be, &tsecr_be)) {
+            ts_found = 1;
+            fake_tsval_be = htonl(ntohl(tsecr_be) - 600000U);
+            fake_tsecr_be = tsval_be;
+        }
 
-        if (!g_ctx.nohopest) {
-            hop = hop_estimate(src_ttl);
-            if (hop <= g_ctx.ttl) {
-                E_INFO("%s:%u ===LOCAL(~)===> %s:%u", src_ip_str,
-                       ntohs(tcph->source), dst_ip_str, ntohs(tcph->dest));
-                return NF_ACCEPT;
+        has_fooling = g_ctx.badsum || g_ctx.md5sig ||
+                      (g_ctx.badseq_offset != 0) ||
+                      (g_ctx.paws_ts && ts_found);
+
+        if (has_fooling) {
+            snd_ttl = g_ctx.ttl_set ? g_ctx.ttl : 64;
+        } else {
+            snd_ttl = g_ctx.ttl;
+            if (!g_ctx.nohopest) {
+                hop = hop_estimate(src_ttl);
+                if (hop <= g_ctx.ttl) {
+                    E_INFO("%s:%u ===LOCAL(~)===> %s:%u", src_ip_str,
+                           ntohs(tcph->source), dst_ip_str, ntohs(tcph->dest));
+                    return NF_ACCEPT;
+                }
+                snd_ttl = calc_snd_ttl(hop);
             }
-            snd_ttl = calc_snd_ttl(hop);
         }
 
         th_payload_get(&payload, &payload_len);
+        build_tcp_options(tcpopt_buf, &tcpopt_len, ts_found, fake_tsval_be,
+                          fake_tsecr_be);
 
         seq_new = tcph->ack_seq;
         if (g_ctx.badseq_offset) {
@@ -402,7 +489,8 @@ int fh_rawsend_handle(struct sockaddr_ll *sll, uint8_t *pkt_data, int pkt_len,
 
         for (i = 0; i < g_ctx.repeat; i++) {
             res = send_payload(sll, daddr, saddr, snd_ttl, tcph->dest,
-                               tcph->source, seq_new, ack_new, 0);
+                               tcph->source, seq_new, ack_new, tcpopt_buf,
+                               tcpopt_len, 0);
             if (res < 0) {
                 E(T(send_payload));
                 return -1;
@@ -444,23 +532,42 @@ int fh_rawsend_handle(struct sockaddr_ll *sll, uint8_t *pkt_data, int pkt_len,
         }
         seq_new = htonl(seq_new);
 
-        snd_ttl = g_ctx.ttl;
+        ts_found = 0;
+        fake_tsval_be = 0;
+        fake_tsecr_be = 0;
+        if (g_ctx.paws_ts && extract_tcp_ts(tcph, &tsval_be, &tsecr_be)) {
+            ts_found = 1;
+            fake_tsval_be = htonl(ntohl(tsval_be) - 600000U);
+            fake_tsecr_be = tsecr_be;
+        }
 
-        if (!g_ctx.nohopest) {
-            hop = hop_estimate(src_ttl);
-            if (hop <= g_ctx.ttl) {
-                E_INFO("%s:%u <===LOCAL(~)=== %s:%u", src_ip_str,
-                       ntohs(tcph->source), dst_ip_str, ntohs(tcph->dest));
-                return NF_ACCEPT;
+        has_fooling = g_ctx.badsum || g_ctx.md5sig ||
+                      (g_ctx.badseq_offset != 0) ||
+                      (g_ctx.paws_ts && ts_found);
+
+        if (has_fooling) {
+            snd_ttl = g_ctx.ttl_set ? g_ctx.ttl : 64;
+        } else {
+            snd_ttl = g_ctx.ttl;
+            if (!g_ctx.nohopest) {
+                hop = hop_estimate(src_ttl);
+                if (hop <= g_ctx.ttl) {
+                    E_INFO("%s:%u <===LOCAL(~)=== %s:%u", src_ip_str,
+                           ntohs(tcph->source), dst_ip_str, ntohs(tcph->dest));
+                    return NF_ACCEPT;
+                }
+                snd_ttl = calc_snd_ttl(hop);
             }
-            snd_ttl = calc_snd_ttl(hop);
         }
 
         th_payload_get(&payload, &payload_len);
+        build_tcp_options(tcpopt_buf, &tcpopt_len, ts_found, fake_tsval_be,
+                          fake_tsecr_be);
 
         for (i = 0; i < g_ctx.repeat; i++) {
             res = send_payload(sll, saddr, daddr, snd_ttl, tcph->source,
-                               tcph->dest, seq_new, tcph->ack_seq,
+                               tcph->dest, seq_new, tcph->ack_seq, tcpopt_buf,
+                               tcpopt_len,
                                g_ctx.use_iptables /* needs SNAT */);
             if (res < 0) {
                 E(T(send_payload));

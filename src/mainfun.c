@@ -90,6 +90,8 @@ static void print_usage(const char *name)
         "  -M                 add fake TCP MD5 signature option (kind 19)\n"
         "  -Q <offset>        subtract <offset> from TCP seq on generated "
         "packets\n"
+        "  -T                 enable PAWS timestamp fooling on generated "
+        "packets\n"
         "  -W <size>          rewrite outbound SYN-ACK TCP window size "
         "(1-65535)\n"
         "\n"
@@ -133,7 +135,8 @@ int main(int argc, char *argv[])
     plinfo_cnt = iface_cnt = 0;
 
     while ((opt = getopt(argc, argv,
-                         "0146ab:de:fgh:i:km:n:r:st:w:x:y:zBD:MQ:W:")) != -1) {
+                         "0146ab:de:fgh:i:km:n:r:st:w:x:y:zBD:MQ:TW:")) !=
+           -1) {
         switch (opt) {
             case '0':
                 g_ctx.inbound = 1;
@@ -277,6 +280,7 @@ int main(int argc, char *argv[])
                     goto free_mem;
                 }
                 g_ctx.ttl = tmp;
+                g_ctx.ttl_set = 1;
                 break;
 
             case 'w':
@@ -339,6 +343,10 @@ int main(int argc, char *argv[])
                     goto free_mem;
                 }
                 g_ctx.badseq_offset = tmp;
+                break;
+
+            case 'T':
+                g_ctx.paws_ts = 1;
                 break;
 
             case 'W':

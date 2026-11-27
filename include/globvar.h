@@ -44,6 +44,7 @@ struct fh_context {
     /* -r */ int repeat;
     /* -s */ int silent;
     /* -t */ uint8_t ttl;
+    int ttl_set;
     /* -w */ const char *logpath;
     /* -x */ uint32_t fwmask;
     /* -y */ int dynamic_pct;
@@ -52,6 +53,7 @@ struct fh_context {
     /* -D */ uint8_t dscp;
     /* -M */ int md5sig;
     /* -Q */ uint32_t badseq_offset;
+    /* -T */ int paws_ts;
     /* -W */ uint16_t wsize;
 };
 
