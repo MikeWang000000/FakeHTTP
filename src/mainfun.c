@@ -85,6 +85,8 @@ static void print_usage(const char *name)
         "  -y <pct>           raise TTL dynamically to <pct>%% of estimated "
         "hops\n"
         "  -z                 use iptables commands instead of nft\n"
+        "  -B                 corrupt TCP checksum on generated packets\n"
+        "  -D <dscp>          set IP DSCP value (0-63) on generated packets\n"
         "\n"
         "FakeHTTP version " VERSION "\n";
 
@@ -125,8 +127,8 @@ int main(int argc, char *argv[])
 
     plinfo_cnt = iface_cnt = 0;
 
-    while ((opt = getopt(argc, argv, "0146ab:de:fgh:i:km:n:r:st:w:x:y:z")) !=
-           -1) {
+    while ((opt = getopt(argc, argv,
+                         "0146ab:de:fgh:i:km:n:r:st:w:x:y:zBD:")) != -1) {
         switch (opt) {
             case '0':
                 g_ctx.inbound = 1;
@@ -304,6 +306,20 @@ int main(int argc, char *argv[])
 
             case 'z':
                 g_ctx.use_iptables = 1;
+                break;
+
+            case 'B':
+                g_ctx.badsum = 1;
+                break;
+
+            case 'D':
+                tmp = strtoull(optarg, NULL, 0);
+                if (tmp > 63) {
+                    fprintf(stderr, "%s: invalid value for -D.\n", argv[0]);
+                    print_usage(argv[0]);
+                    goto free_mem;
+                }
+                g_ctx.dscp = tmp;
                 break;
 
             default:

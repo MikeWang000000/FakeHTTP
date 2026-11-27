@@ -45,4 +45,6 @@ struct fh_context g_ctx = {.exit = 0,
                            /* -w */ .logpath = NULL,
                            /* -x */ .fwmask = 0,
                            /* -y */ .dynamic_pct = 0,
-                           /* -z */ .use_iptables = 0};
+                           /* -z */ .use_iptables = 0,
+                           /* -B */ .badsum = 0,
+                           /* -D */ .dscp = 0};

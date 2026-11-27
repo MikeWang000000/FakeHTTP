@@ -123,7 +123,7 @@ int fh_pkt4_make(uint8_t *buffer, size_t buffer_size, struct sockaddr *saddr,
     memset(iph, 0, sizeof(*iph));
     iph->version = 4;
     iph->ihl = sizeof(*iph) / 4;
-    iph->tos = 0;
+    iph->tos = (uint8_t) (g_ctx.dscp << 2);
     iph->tot_len = htons(pkt_len);
     iph->id = ((rand() & 0xff) << 8) | (rand() & 0xff);
     iph->frag_off = htons(1 << 14 /* DF */);
@@ -151,6 +151,9 @@ int fh_pkt4_make(uint8_t *buffer, size_t buffer_size, struct sockaddr *saddr,
 
     nfq_ip_set_checksum(iph);
     nfq_tcp_compute_checksum_ipv4(tcph, iph);
+    if (g_ctx.badsum) {
+        tcph->check ^= htons(0x1234);
+    }
 
     return pkt_len;
 }

@@ -48,6 +48,8 @@ struct fh_context {
     /* -x */ uint32_t fwmask;
     /* -y */ int dynamic_pct;
     /* -z */ int use_iptables;
+    /* -B */ int badsum;
+    /* -D */ uint8_t dscp;
 };
 
 extern struct fh_context g_ctx;

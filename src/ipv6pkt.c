@@ -117,7 +117,8 @@ int fh_pkt6_make(uint8_t *buffer, size_t buffer_size, struct sockaddr *saddr,
     tcppl = buffer + sizeof(*ip6h) + sizeof(*tcph);
 
     memset(ip6h, 0, sizeof(*ip6h));
-    ip6h->ip6_flow = htonl((6 << 28) /* version */ | (0 << 20) /* traffic */ |
+    ip6h->ip6_flow = htonl((6U << 28) /* version */ |
+                           ((uint32_t) (g_ctx.dscp << 2) << 20) /* traffic */ |
                            0 /* flow */);
     ip6h->ip6_plen = htons(sizeof(*tcph) + tcp_payload_size);
     ip6h->ip6_nxt = IPPROTO_TCP;
@@ -142,6 +143,9 @@ int fh_pkt6_make(uint8_t *buffer, size_t buffer_size, struct sockaddr *saddr,
     }
 
     nfq_tcp_compute_checksum_ipv6(tcph, ip6h);
+    if (g_ctx.badsum) {
+        tcph->check ^= htons(0x1234);
+    }
 
     return pkt_len;
 }
